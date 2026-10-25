@@ -1,7 +1,13 @@
-
+from datetime import date, datetime
+from html import escape
 from pathlib import Path
 import base64
+
 import streamlit as st
+
+import auth
+import database as db
+import storage
 
 # ==========================================
 # CERTIFICATE VAULT — RITESH KUMAR SINGH
@@ -9,7 +15,34 @@ import streamlit as st
 # ==========================================
 
 ROOT = Path(__file__).resolve().parent
-PHOTO_PATH = ROOT / "assets" / "ritesh_profile.jpeg"
+ASSETS = ROOT / "assets"
+
+CATEGORIES = [
+    "Data Science",
+    "Python",
+    "Machine Learning",
+    "Artificial Intelligence",
+    "SQL",
+    "Internship",
+    "Other",
+]
+
+
+def find_photo():
+    """Return the profile photo path if one exists in assets/."""
+    for name in (
+        "ritesh_profile.jpeg",
+        "ritesh_profile.jpg",
+        "ritesh_profile.png",
+        "ritesh_profile.webp",
+    ):
+        candidate = ASSETS / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+PHOTO_PATH = find_photo()
 
 st.set_page_config(
     page_title="Certificate Vault | Ritesh Kumar Singh",
@@ -19,306 +52,96 @@ st.set_page_config(
 )
 
 # Session state
-if "page" not in st.session_state:
-    st.session_state.page = "Home"
+st.session_state.setdefault("page", "Home")
+st.session_state.setdefault("authenticated", False)
+st.session_state.setdefault("flash", None)
 
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+# ==========================================
+# STYLES
+# ==========================================
+
+st.markdown(
+    f"<style>{(ROOT / 'styles.css').read_text(encoding='utf-8')}</style>",
+    unsafe_allow_html=True,
+)
 
 
 # ==========================================
-# PREMIUM UI DESIGN
+# HELPERS
 # ==========================================
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;600;700;800&display=swap');
+def html(markup):
+    """
+    Render raw HTML safely through st.markdown.
 
-:root {
-    --bg: #07111f;
-    --panel: #102139;
-    --line: #29415e;
-    --cyan: #67e8f9;
-    --blue: #60a5fa;
-    --muted: #a8bad0;
-}
+    Markdown treats lines indented by 4+ spaces (or HTML followed by blank
+    lines) as a code block, which is what printed "</section>" on the Home
+    page. Stripping every line to a single compact string avoids that.
+    """
+    compact = "".join(line.strip() for line in markup.splitlines())
+    st.markdown(compact, unsafe_allow_html=True)
 
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
-
-.stApp {
-    background:
-        radial-gradient(ellipse at 10% 0%, #142d50 0%, transparent 35%),
-        radial-gradient(ellipse at 95% 15%, #0c3342 0%, transparent 30%),
-        var(--bg);
-    color: #f5f8ff;
-}
-
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0b192b, #07111f);
-    border-right: 1px solid var(--line);
-}
-
-.block-container {
-    max-width: 1450px;
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-}
-
-h1, h2, h3 {
-    font-family: 'Manrope', sans-serif !important;
-    letter-spacing: -0.035em;
-}
-
-.hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.5fr) minmax(200px, 0.5fr);
-    gap: 30px;
-    align-items: center;
-    position: relative;
-    overflow: hidden;
-    padding: clamp(25px, 4vw, 52px);
-    border-radius: 26px;
-    border: 1px solid #294c68;
-    background: linear-gradient(120deg, #122440, #102e40);
-    box-shadow: 0 15px 55px #00000035;
-    animation: fadeUp 0.7s ease;
-}
-
-.hero:before {
-    content: "";
-    position: absolute;
-    width: 300px;
-    height: 300px;
-    right: 10%;
-    top: -200px;
-    border-radius: 50%;
-    background: #22d3ee30;
-    filter: blur(30px);
-    animation: glow 5s ease-in-out infinite alternate;
-}
-
-.hero-copy, .hero-photo {
-    position: relative;
-    z-index: 1;
-}
-
-.eyebrow {
-    color: var(--cyan);
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 2.5px;
-    text-transform: uppercase;
-}
-
-.hero h1 {
-    font-size: clamp(34px, 4vw, 57px);
-    line-height: 1.12;
-    margin: 18px 0;
-    color: #f7fbff;
-}
-
-.hero p {
-    color: #c3d4e8;
-    font-size: 16px;
-    line-height: 1.8;
-}
-
-.owner-pill {
-    display: inline-block;
-    padding: 10px 15px;
-    margin-top: 12px;
-    border: 1px solid #3a7187;
-    border-radius: 999px;
-    color: #a5f3fc;
-    background: #0891b218;
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.hero-photo {
-    justify-self: center;
-    width: min(100%, 255px);
-    padding: 6px;
-    border-radius: 25px;
-    background: linear-gradient(135deg, #67e8f9, #3b82f6, #a78bfa);
-    background-size: 200% 200%;
-    animation: borderFlow 5s ease infinite, floatPhoto 5s ease-in-out infinite;
-    box-shadow: 0 0 30px #22d3ee30;
-}
-
-.hero-photo img {
-    display: block;
-    width: 100%;
-    height: 290px;
-    object-fit: cover;
-    object-position: center 25%;
-    border-radius: 20px;
-}
-
-.section-title {
-    font-family: 'Manrope', sans-serif;
-    font-size: 25px;
-    font-weight: 800;
-    margin-top: 32px;
-    margin-bottom: 6px;
-}
-
-.section-subtitle {
-    color: var(--muted);
-    margin-bottom: 20px;
-}
-
-.metric-card, .feature-card {
-    padding: 22px;
-    border-radius: 17px;
-    border: 1px solid var(--line);
-    background: linear-gradient(145deg, #122740, #0b192b);
-    transition: 0.25s ease;
-    height: 100%;
-}
-
-.metric-card:hover, .feature-card:hover {
-    transform: translateY(-4px);
-    border-color: var(--cyan);
-    box-shadow: 0 10px 28px #00000025, 0 0 18px #22d3ee10;
-}
-
-.metric-label {
-    color: #afc2d9;
-    font-size: 12px;
-}
-
-.metric-value {
-    color: var(--cyan);
-    font-size: 30px;
-    font-weight: 800;
-    margin-top: 12px;
-}
-
-.feature-icon {
-    font-size: 25px;
-    margin-bottom: 12px;
-}
-
-.feature-card h3 {
-    font-size: 18px;
-}
-
-.feature-card p {
-    color: var(--muted);
-    line-height: 1.7;
-    font-size: 13px;
-}
-
-.stButton > button {
-    min-height: 44px;
-    border-radius: 12px;
-    font-weight: 700;
-    border: 1px solid #365371;
-    transition: all 0.2s ease;
-}
-
-.stButton > button:hover {
-    transform: translateY(-2px);
-    border-color: var(--cyan);
-    box-shadow: 0 0 18px #22d3ee20;
-}
-
-.stButton > button[kind="primary"] {
-    background: linear-gradient(100deg, #0891b2, #2563eb);
-    border: none;
-}
-
-div[data-testid="stTextInput"] input,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] {
-    border-radius: 11px;
-}
-
-.footer {
-    border-top: 1px solid var(--line);
-    margin-top: 45px;
-    padding-top: 22px;
-    text-align: center;
-    color: #8ca2bc;
-    font-size: 12px;
-    line-height: 1.8;
-}
-
-@keyframes fadeUp {
-    from { opacity: 0; transform: translateY(12px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes glow {
-    from { transform: translateX(-15px); }
-    to { transform: translateX(45px); }
-}
-
-@keyframes floatPhoto {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-6px); }
-}
-
-@keyframes borderFlow {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-}
-
-@media (max-width: 750px) {
-    .hero {
-        grid-template-columns: 1fr;
-    }
-
-    .hero-photo {
-        width: 210px;
-    }
-
-    .hero-photo img {
-        height: 240px;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    *, *:before, *:after {
-        animation: none !important;
-        transition: none !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# ==========================================
-# HELPER FUNCTIONS
-# ==========================================
 
 def navigate(page):
     st.session_state.page = page
     st.rerun()
 
 
+def flash(message, kind="success"):
+    st.session_state.flash = (kind, message)
+
+
+def show_flash():
+    item = st.session_state.get("flash")
+    if item:
+        kind, message = item
+        getattr(st, kind, st.info)(message)
+        st.session_state.flash = None
+
+
 def profile_photo_html():
-    if not PHOTO_PATH.exists():
-        return """
-        <div class="hero-photo"
-             style="height:200px;display:flex;align-items:center;
-             justify-content:center;font-size:70px">
-             👨‍💻
-        </div>
-        """
+    if PHOTO_PATH is None:
+        return (
+            '<div class="hero-photo" style="height:200px;display:flex;'
+            'align-items:center;justify-content:center;font-size:70px">'
+            "👨‍💻</div>"
+        )
 
-    image_data = base64.b64encode(
-        PHOTO_PATH.read_bytes()
-    ).decode("utf-8")
+    mime = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }[PHOTO_PATH.suffix.lower()]
+    data = base64.b64encode(PHOTO_PATH.read_bytes()).decode("utf-8")
+    return (
+        '<div class="hero-photo">'
+        f'<img src="data:{mime};base64,{data}" '
+        'alt="Ritesh Kumar Singh profile photo">'
+        "</div>"
+    )
 
-    return f"""
-    <div class="hero-photo">
-        <img src="data:image/jpeg;base64,{image_data}"
-             alt="Ritesh Kumar Singh profile photo">
-    </div>
-    """
+
+def valid_url(url):
+    url = (url or "").strip()
+    return url == "" or url.lower().startswith(("http://", "https://"))
+
+
+def render_file(file_path, key):
+    """Show a certificate's stored file (image preview or PDF download)."""
+    path = storage.get_certificate_file(file_path)
+    if path is None:
+        return
+    if path.suffix.lower() == ".pdf":
+        st.download_button(
+            "📄 Download certificate (PDF)",
+            data=path.read_bytes(),
+            file_name=path.name,
+            mime="application/pdf",
+            key=f"dl_{key}",
+        )
+    else:
+        st.image(str(path), width="stretch")
 
 
 # ==========================================
@@ -348,14 +171,18 @@ with st.sidebar:
         if st.button(
             label,
             key=f"nav_{page_name}",
-            use_container_width=True,
-            type=(
-                "primary"
-                if st.session_state.page == page_name
-                else "secondary"
-            ),
+            width="stretch",
+            type="primary" if st.session_state.page == page_name else "secondary",
         ):
             navigate(page_name)
+
+    if auth.is_authenticated():
+        st.divider()
+        st.success("Admin signed in")
+        if st.button("🚪  Sign out", key="nav_logout", width="stretch"):
+            auth.logout()
+            flash("You have been signed out.", "info")
+            navigate("Home")
 
     st.divider()
     st.caption("Built with Python & Streamlit")
@@ -366,70 +193,58 @@ with st.sidebar:
 # HOME PAGE
 # ==========================================
 
-if st.session_state.page == "Home":
+page = st.session_state.page
 
-    st.markdown(
+if page == "Home":
+    show_flash()
+    stats = db.get_dashboard_stats()
+
+    html(
         f"""
         <section class="hero">
             <div class="hero-copy">
-                <div class="eyebrow">
-                    MY LEARNING JOURNEY · MY ACHIEVEMENTS
-                </div>
+                <div class="eyebrow">MY LEARNING JOURNEY · MY ACHIEVEMENTS</div>
                 <h1>Knowledge Earned.<br>Potential Unlocked.</h1>
-                <p>
-                    Welcome to my personal Certificate Vault —
-                    a central portfolio for my certifications,
-                    technical skills, learning milestones,
-                    and professional growth.
-                </p>
-                <div class="owner-pill">
-                    ✦ Ritesh Kumar Singh &nbsp; | &nbsp; Founder & CEO
-                </div>
+                <p>Welcome to my personal Certificate Vault — a central portfolio
+                for my certifications, technical skills, learning milestones,
+                and professional growth.</p>
+                <div class="owner-pill">✦ Ritesh Kumar Singh &nbsp; | &nbsp; Founder &amp; CEO</div>
             </div>
             {profile_photo_html()}
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
-    st.markdown(
+    html(
         '<div class="section-title">Portfolio at a Glance</div>'
         '<div class="section-subtitle">'
-        'A professional home for my learning achievements.'
-        '</div>',
-        unsafe_allow_html=True,
+        "A professional home for my learning achievements."
+        "</div>"
     )
 
     c1, c2, c3 = st.columns(3)
-
     metrics = [
-        (c1, "PUBLISHED CERTIFICATES", "0"),
-        (c2, "SKILL CATEGORIES", "0"),
+        (c1, "PUBLISHED CERTIFICATES", str(stats["published"])),
+        (c2, "SKILL CATEGORIES", str(stats["categories"])),
         (c3, "PORTFOLIO FOCUS", "AI + DATA"),
     ]
-
     for col, label, value in metrics:
         with col:
-            st.markdown(
+            html(
                 f"""
                 <div class="metric-card">
                     <div class="metric-label">{label}</div>
                     <div class="metric-value">{value}</div>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
 
-    st.markdown(
+    html(
         '<div class="section-title">Explore Your Portfolio</div>'
-        '<div class="section-subtitle">'
-        'Choose a section to continue.'
-        '</div>',
-        unsafe_allow_html=True,
+        '<div class="section-subtitle">Choose a section to continue.</div>'
     )
 
     a, b, c = st.columns(3)
-
     features = [
         (a, "🏆", "Certificate Library",
          "Browse published certificates, skills, and credentials."),
@@ -438,100 +253,99 @@ if st.session_state.page == "Home":
         (c, "🔐", "Owner Control Center",
          "Manage certificate records through the private admin area."),
     ]
-
     for col, icon, title, description in features:
         with col:
-            st.markdown(
+            html(
                 f"""
                 <div class="feature-card">
                     <div class="feature-icon">{icon}</div>
                     <h3>{title}</h3>
                     <p>{description}</p>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
 
+    st.write("")
     x, y = st.columns(2)
-
     with x:
-        if st.button(
-            "Explore Certificates  →",
-            type="primary",
-            use_container_width=True,
-        ):
+        if st.button("Explore Certificates  →", type="primary", width="stretch"):
             navigate("Certificates")
-
     with y:
-        if st.button(
-            "Meet the Owner  →",
-            use_container_width=True,
-        ):
+        if st.button("Meet the Owner  →", width="stretch"):
             navigate("About")
 
 
 # ==========================================
-# CERTIFICATE PAGE — CONNECT DATABASE NEXT
+# CERTIFICATE LIBRARY (PUBLIC)
 # ==========================================
 
-elif st.session_state.page == "Certificates":
-
+elif page == "Certificates":
     st.title("🏆 Certificate Library")
-    st.caption(
-        "Search and explore certificates published by the owner."
+    st.caption("Search and explore certificates published by the owner.")
+
+    f1, f2 = st.columns([2, 1])
+    with f1:
+        search = st.text_input(
+            "🔎 Search certificates",
+            placeholder="Search by title, issuer, or skill...",
+        )
+    with f2:
+        category = st.selectbox("Filter by category", ["All Categories"] + CATEGORIES)
+
+    certificates = db.get_certificates(
+        published_only=True, category=category, search=search
     )
 
-    search = st.text_input(
-        "🔎 Search certificates",
-        placeholder="Search by title, issuer, or skill...",
-    )
-
-    category = st.selectbox(
-        "Filter by category",
-        [
-            "All Categories",
-            "Data Science",
-            "Python",
-            "Machine Learning",
-            "Artificial Intelligence",
-            "SQL",
-            "Internship",
-            "Other",
-        ],
-    )
-
-    st.info(
-        "Your certificate database will be connected in the next files. "
-        "After setup, published certificates will appear here."
-    )
+    if not certificates:
+        st.info(
+            "No published certificates found. "
+            "Add and publish certificates from the Admin Studio."
+        )
+    else:
+        st.caption(f"Showing {len(certificates)} certificate(s)")
+        for cert in certificates:
+            with st.container(border=True):
+                left, right = st.columns([2, 1], gap="large")
+                with left:
+                    st.subheader(cert["title"])
+                    st.markdown(
+                        f"**Issuer:** {cert['issuer']}  \n"
+                        f"**Category:** {cert['category']}"
+                        + (f"  \n**Issued:** {cert['issue_date']}" if cert["issue_date"] else "")
+                        + (f"  \n**Credential ID:** `{cert['credential_id']}`" if cert["credential_id"] else "")
+                    )
+                    if cert["description"]:
+                        st.write(cert["description"])
+                    if cert["skills"]:
+                        badges = "".join(
+                            f'<span class="badge">{escape(s.strip())}</span>'
+                            for s in cert["skills"].split(",")
+                            if s.strip()
+                        )
+                        html(badges)
+                    if cert["verification_url"] and valid_url(cert["verification_url"]):
+                        st.link_button("🔗 Verify credential", cert["verification_url"])
+                with right:
+                    render_file(cert["file_path"], f"pub_{cert['id']}")
 
 
 # ==========================================
 # ABOUT OWNER PAGE
 # ==========================================
 
-elif st.session_state.page == "About":
-
+elif page == "About":
     st.title("👤 About the Owner")
 
     left, right = st.columns([1, 2], gap="large")
 
     with left:
-        if PHOTO_PATH.exists():
-            st.image(
-                str(PHOTO_PATH),
-                caption="Ritesh Kumar Singh",
-                use_container_width=True,
-            )
+        if PHOTO_PATH is not None:
+            st.image(str(PHOTO_PATH), caption="Ritesh Kumar Singh", width="stretch")
         else:
             st.info("Add your photo at assets/ritesh_profile.jpeg")
 
     with right:
-        st.markdown(
-            '<div class="eyebrow">OWNER · FOUNDER · CEO</div>',
-            unsafe_allow_html=True,
-        )
-
+        html('<div class="eyebrow">OWNER · FOUNDER · CEO</div>')
         st.header("Ritesh Kumar Singh")
         st.write(
             "Data Science Student | Python | Machine Learning | "
@@ -539,7 +353,6 @@ elif st.session_state.page == "About":
         )
 
         st.markdown("### My Mission")
-
         st.write(
             "To continuously learn, build practical projects, "
             "develop industry-relevant skills, and document my "
@@ -547,7 +360,6 @@ elif st.session_state.page == "About":
         )
 
         st.markdown("### Areas of Interest")
-
         st.markdown(
             "- Data Science and Data Analytics\n"
             "- Python Programming and SQL\n"
@@ -555,62 +367,222 @@ elif st.session_state.page == "About":
             "- Building practical technology projects"
         )
 
-        st.markdown(
-            '<div class="owner-pill">'
-            '✦ Founder & CEO — Certificate Vault'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+        html('<div class="owner-pill">✦ Founder &amp; CEO — Certificate Vault</div>')
 
 
 # ==========================================
-# ADMIN PAGE — AUTHENTICATION COMES NEXT
+# ADMIN STUDIO (LOGIN + MANAGEMENT)
 # ==========================================
 
-elif st.session_state.page == "Admin":
-
+elif page in ("Admin", "Login"):
     st.title("⚙️ Admin Studio")
     st.caption("Private workspace for the portfolio owner.")
 
-    if not st.session_state.authenticated:
-        st.warning(
-            "Admin login and protected certificate management "
-            "will be connected in the upcoming files."
-        )
+    # ---------- Login gate ----------
+    if not auth.is_authenticated():
+        if not auth.credentials_configured():
+            st.error(
+                "Admin credentials are not configured. Create "
+                "`.streamlit/secrets.toml` (locally) or add the same text under "
+                "**Settings → Secrets** (Streamlit Cloud):"
+            )
+            st.code(
+                '[admin]\nemail = "your-email@example.com"\n'
+                'password = "choose-a-strong-password"',
+                language="toml",
+            )
+            st.stop()
 
-        if st.button(
-            "Go to Admin Login Setup  →",
-            type="primary",
-        ):
-            navigate("Login")
-    else:
-        st.success("Admin session active.")
+        show_flash()
+        st.subheader("🔐 Owner Sign In")
+        _, mid, _ = st.columns([1, 2, 1])
+        with mid:
+            with st.form("login_form"):
+                email = st.text_input("Email", autocomplete="username")
+                password = st.text_input(
+                    "Password", type="password", autocomplete="current-password"
+                )
+                submitted = st.form_submit_button(
+                    "Sign In", type="primary", width="stretch"
+                )
+            if submitted:
+                ok, message = auth.login(email, password)
+                if ok:
+                    flash(message, "success")
+                    navigate("Admin")
+                else:
+                    st.error(message)
+        st.stop()
 
+    # ---------- Authenticated area ----------
+    show_flash()
+    stats = db.get_dashboard_stats()
 
-elif st.session_state.page == "Login":
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total", stats["total"])
+    m2.metric("Published", stats["published"])
+    m3.metric("Drafts", stats["drafts"])
+    m4.metric("Categories", stats["categories"])
 
-    st.title("🔐 Owner Sign In")
+    tab_add, tab_manage = st.tabs(["➕ Add Certificate", "🗂️ Manage Certificates"])
 
-    st.info(
-        "Secure authentication will be implemented when we connect "
-        "the configuration and database files."
-    )
+    # ----- Add -----
+    with tab_add:
+        with st.form("add_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            title = c1.text_input("Title *")
+            issuer = c2.text_input("Issuer *")
+            category = c1.selectbox("Category", CATEGORIES, index=len(CATEGORIES) - 1)
+            issue_date = c2.date_input("Issue date", value=date.today())
+            credential_id = c1.text_input("Credential ID")
+            verification_url = c2.text_input("Verification URL (https://...)")
+            skills = st.text_input("Skills (comma separated)")
+            description = st.text_area("Description")
+            upload = st.file_uploader(
+                "Certificate file (PDF, PNG, JPG, JPEG, WEBP — max 10 MB)",
+                type=["pdf", "png", "jpg", "jpeg", "webp"],
+            )
+            publish = st.checkbox("Publish immediately", value=True)
+            add_clicked = st.form_submit_button("Save Certificate", type="primary")
 
-    if st.button("← Back to Home"):
-        navigate("Home")
+        if add_clicked:
+            if not title.strip() or not issuer.strip():
+                st.error("Title and issuer are required.")
+            elif not valid_url(verification_url):
+                st.error("Verification URL must start with http:// or https://")
+            else:
+                saved_path = ""
+                try:
+                    if upload is not None:
+                        saved_path = storage.save_certificate_file(upload)
+                    new_id = db.add_certificate(
+                        title=title,
+                        issuer=issuer,
+                        category=category,
+                        issue_date=issue_date.isoformat() if issue_date else "",
+                        credential_id=credential_id.strip(),
+                        verification_url=verification_url.strip(),
+                        description=description.strip(),
+                        skills=skills.strip(),
+                        file_path=saved_path,
+                        published=publish,
+                    )
+                    flash(f"Certificate #{new_id} saved.", "success")
+                    st.rerun()
+                except storage.StorageError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001
+                    if saved_path:
+                        storage.delete_certificate_file(saved_path)
+                    st.error(f"Could not save certificate: {exc}")
+
+    # ----- Manage -----
+    with tab_manage:
+        certificates = db.get_certificates()
+        if not certificates:
+            st.info("No certificates yet. Add your first one in the previous tab.")
+
+        for cert in certificates:
+            cid = cert["id"]
+            status = "✅ Published" if cert["published"] else "📝 Draft"
+            with st.expander(f"{status}  ·  {cert['title']}  —  {cert['issuer']}"):
+                with st.form(f"edit_{cid}"):
+                    c1, c2 = st.columns(2)
+                    e_title = c1.text_input("Title *", cert["title"])
+                    e_issuer = c2.text_input("Issuer *", cert["issuer"])
+                    cat_options = CATEGORIES if cert["category"] in CATEGORIES else CATEGORIES + [cert["category"]]
+                    e_category = c1.selectbox(
+                        "Category", cat_options, index=cat_options.index(cert["category"])
+                    )
+                    try:
+                        current_date = datetime.strptime(cert["issue_date"], "%Y-%m-%d").date()
+                    except (ValueError, TypeError):
+                        current_date = date.today()
+                    e_date = c2.date_input("Issue date", value=current_date)
+                    e_cred = c1.text_input("Credential ID", cert["credential_id"])
+                    e_url = c2.text_input("Verification URL", cert["verification_url"])
+                    e_skills = st.text_input("Skills (comma separated)", cert["skills"])
+                    e_desc = st.text_area("Description", cert["description"])
+                    e_file = st.file_uploader(
+                        "Replace certificate file (optional)",
+                        type=["pdf", "png", "jpg", "jpeg", "webp"],
+                        key=f"file_{cid}",
+                    )
+                    e_pub = st.checkbox("Published", value=bool(cert["published"]))
+                    save_clicked = st.form_submit_button("Save Changes", type="primary")
+
+                current = storage.get_certificate_file(cert["file_path"])
+                if current is not None:
+                    st.caption(f"Current file: {current.name}")
+                    if current.suffix.lower() != ".pdf":
+                        st.image(str(current), width=260)
+                else:
+                    st.caption("No file attached.")
+
+                if save_clicked:
+                    if not e_title.strip() or not e_issuer.strip():
+                        st.error("Title and issuer are required.")
+                    elif not valid_url(e_url):
+                        st.error("Verification URL must start with http:// or https://")
+                    else:
+                        new_path = None
+                        try:
+                            if e_file is not None:
+                                new_path = storage.save_certificate_file(e_file)
+                            fields = dict(
+                                title=e_title,
+                                issuer=e_issuer,
+                                category=e_category,
+                                issue_date=e_date.isoformat(),
+                                credential_id=e_cred.strip(),
+                                verification_url=e_url.strip(),
+                                description=e_desc.strip(),
+                                skills=e_skills.strip(),
+                                published=e_pub,
+                            )
+                            if new_path:
+                                fields["file_path"] = new_path
+                            db.update_certificate(cid, **fields)
+                            if new_path and cert["file_path"]:
+                                storage.delete_certificate_file(cert["file_path"])
+                            flash("Certificate updated.", "success")
+                            st.rerun()
+                        except storage.StorageError as exc:
+                            st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001
+                            if new_path:
+                                storage.delete_certificate_file(new_path)
+                            st.error(f"Could not update certificate: {exc}")
+
+                d1, d2, d3 = st.columns([1, 1, 2])
+                toggle_label = "Unpublish" if cert["published"] else "Publish"
+                if d1.button(toggle_label, key=f"toggle_{cid}", width="stretch"):
+                    db.set_published(cid, not cert["published"])
+                    flash("Certificate unpublished." if cert["published"] else "Certificate published.", "success")
+                    st.rerun()
+
+                confirm = d3.checkbox("Confirm delete", key=f"confirm_{cid}")
+                if d2.button("🗑️ Delete", key=f"delete_{cid}", width="stretch"):
+                    if confirm:
+                        db.delete_certificate(cid)
+                        if cert["file_path"]:
+                            storage.delete_certificate_file(cert["file_path"])
+                        flash("Certificate deleted.", "success")
+                        st.rerun()
+                    else:
+                        st.warning("Tick 'Confirm delete' first.")
 
 
 # ==========================================
 # FOOTER
 # ==========================================
 
-st.markdown(
+html(
     """
     <div class="footer">
-        © 2026 Ritesh Kumar Singh · Founder & CEO<br>
-        Certificate Vault · Built with Python & Streamlit<br>
+        © 2026 Ritesh Kumar Singh · Founder &amp; CEO<br>
+        Certificate Vault · Built with Python &amp; Streamlit<br>
         Learn. Build. Verify. Grow.
     </div>
-    """,
-    unsafe_allow_html=True,
+    """
 )

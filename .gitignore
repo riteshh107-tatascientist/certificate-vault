@@ -1,8 +1,7 @@
 .streamlit/secrets.toml
+data/*.db
+uploads/*
+!uploads/.gitkeep
 __pycache__/
-*.py[cod]
-certificates.db
-certificate_files/
+*.pyc
 .venv/
-venv/
-.env

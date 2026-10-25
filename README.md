@@ -1,40 +1,50 @@
 # Certificate Vault — Ritesh Kumar Singh
 
-A Streamlit certificate portfolio with an owner-only admin area and a public read-only gallery.
+A Streamlit certificate portfolio with a public gallery and a password-protected admin area.
 
 ## Features
-- Branded homepage: Ritesh Kumar Singh — Founder & CEO
-- Public certificate gallery with search and category filter
-- Admin login, add, edit, replace, publish/unpublish, and delete
-- SQLite metadata database and local file storage
-- Upload validation for PDF, PNG, JPG/JPEG (15 MB max)
-- Credential verification links, when provided
-
-## Requirements
-- Python 3.10+
-- Streamlit
+- Branded homepage with live counters (published certificates, categories)
+- Public gallery with search and category filter
+- Admin login (email + password, 5-attempt lockout)
+- Add, edit, replace file, publish/unpublish, delete (with confirmation)
+- SQLite metadata + local file storage
+- Upload validation: PDF, PNG, JPG/JPEG, WEBP, 10 MB max, file-signature check
 
 ## Run locally
-1. Create and activate a virtual environment (recommended).
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Copy `.streamlit/secrets.example.toml` to `.streamlit/secrets.toml`.
-   Rename it to `secrets.toml` and set your own email/password.
-4. Start the app:
-   ```bash
-   streamlit run app.py
-   ```
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate     Mac/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## Admin login
+Credentials are read from `.streamlit/secrets.toml`:
+```toml
+[admin]
+email = "your-email@example.com"
+password = "choose-a-strong-password"
+```
+A temporary file is included (`admin@certvault.local` / `ChangeMe@2026`) — **change it**.
+Optional: store a SHA-256 hash instead of the plain password with `password_sha256 = "..."`.
+
+### Streamlit Community Cloud
+App → Settings → **Secrets** → paste the `[admin]` block above. The local
+`secrets.toml` is not uploaded (it is in `.gitignore`).
+
+## Profile photo
+Put your photo at `assets/ritesh_profile.jpeg` (`.jpg`, `.png`, `.webp` also work).
 
 ## Files
-- `app.py` — user interface, public gallery and admin pages
-- `database.py` — SQLite metadata CRUD
-- `storage.py` — local certificate file handling
+- `app.py` — pages: Home, Certificates, About, Admin
+- `auth.py` — login, lockout, logout
+- `database.py` — SQLite CRUD
+- `storage.py` — validated file storage
+- `styles.css` — theme
 
-## Important deployment/security notes
-This is a local-first starter application. SQLite and `certificate_files/` are stored on the machine's filesystem. Streamlit Community Cloud's local filesystem is not a reliable persistent storage solution, so do not deploy this version as a permanent cloud vault without replacing local persistence with managed storage (for example, Supabase Storage + PostgreSQL).
-
-The basic email/password check in this starter app is not a substitute for a production authentication provider. The current code controls which UI is shown but does not provide robust multi-user identity or server-side database authorization. For a public production deployment, use Supabase Auth and Row Level Security policies so only the authenticated owner can write, while anonymous visitors can read published metadata/files only. Keep private files in a private bucket and use authenticated/signed access.
-
-Never commit `.streamlit/secrets.toml`, real credentials, certificate files, or the local database to a public repository. Do not upload certificates containing sensitive personal information to a public portfolio.
+## Important deployment note
+SQLite and `uploads/` live on the local filesystem. Streamlit Community Cloud storage
+is **not persistent** — certificates added there can disappear when the app restarts.
+For a permanent online vault, use managed storage (e.g. Supabase Storage + PostgreSQL),
+or host on a server/VPS with a persistent disk. Never commit `secrets.toml`, the
+database, or private certificates to a public repo.
