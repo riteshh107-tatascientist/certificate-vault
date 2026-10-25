@@ -85,6 +85,27 @@ def validate_file(uploaded_file):
     return True, ""
 
 
+MIME_TYPES = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def prepare_upload(uploaded_file):
+    """
+    Validate an uploaded file and return (bytes, filename, mime_type)
+    so it can be stored directly in the database.
+    """
+    is_valid, error = validate_file(uploaded_file)
+    if not is_valid:
+        raise StorageError(error)
+    extension = Path(uploaded_file.name).suffix.lower()
+    return uploaded_file.getvalue(), Path(uploaded_file.name).name, MIME_TYPES[extension]
+
+
 def save_certificate_file(uploaded_file):
     """
     Validate and save a certificate file.

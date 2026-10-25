@@ -36,6 +36,16 @@ def initialize_database():
             )
         """)
 
+        # Migrate older databases: store the certificate file inside the DB.
+        existing = {row[1] for row in connection.execute("PRAGMA table_info(certificates)")}
+        for column, ddl in (
+            ("file_data", "BLOB"),
+            ("file_name", "TEXT DEFAULT ''"),
+            ("file_mime", "TEXT DEFAULT ''"),
+        ):
+            if column not in existing:
+                connection.execute(f"ALTER TABLE certificates ADD COLUMN {column} {ddl}")
+
         connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_certificates_published
             ON certificates(published)
@@ -66,6 +76,25 @@ def get_connection():
         connection.close()
 
 
+LIST_COLUMNS = (
+    "id, title, issuer, category, issue_date, credential_id, verification_url, "
+    "description, skills, file_path, published, created_at, updated_at, "
+    "file_name, file_mime, (file_data IS NOT NULL AND LENGTH(file_data) > 0) AS has_blob"
+)
+
+
+def get_certificate_blob(certificate_id):
+    """Return (bytes, filename, mime) stored in the database, or None."""
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT file_data, file_name, file_mime FROM certificates WHERE id = ?",
+            (certificate_id,),
+        ).fetchone()
+    if row and row["file_data"]:
+        return bytes(row["file_data"]), row["file_name"] or "certificate", row["file_mime"] or ""
+    return None
+
+
 def add_certificate(
     title,
     issuer,
@@ -77,6 +106,9 @@ def add_certificate(
     skills="",
     file_path="",
     published=False,
+    file_data=None,
+    file_name="",
+    file_mime="",
 ):
     """Insert a certificate and return its new ID."""
     title = title.strip()
@@ -94,9 +126,10 @@ def add_certificate(
             INSERT INTO certificates (
                 title, issuer, category, issue_date,
                 credential_id, verification_url,
-                description, skills, file_path, published
+                description, skills, file_path, published,
+                file_data, file_name, file_mime
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 title,
@@ -109,6 +142,9 @@ def add_certificate(
                 skills,
                 file_path,
                 int(published),
+                file_data,
+                file_name,
+                file_mime,
             ),
         )
 
@@ -132,7 +168,7 @@ def get_certificates(
     search=None,
 ):
     """Return certificates with optional filters."""
-    query = "SELECT * FROM certificates WHERE 1=1"
+    query = f"SELECT {LIST_COLUMNS} FROM certificates WHERE 1=1"
     parameters = []
 
     if published_only:
@@ -178,6 +214,9 @@ def update_certificate(certificate_id, **fields):
         "skills",
         "file_path",
         "published",
+        "file_data",
+        "file_name",
+        "file_mime",
     }
 
     updates = {

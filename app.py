@@ -127,21 +127,64 @@ def valid_url(url):
     return url == "" or url.lower().startswith(("http://", "https://"))
 
 
-def render_file(file_path, key):
-    """Show a certificate's stored file (image preview or PDF download)."""
-    path = storage.get_certificate_file(file_path)
-    if path is None:
+def load_file(cert):
+    """Return (bytes, filename, mime) for a certificate, or None."""
+    blob = db.get_certificate_blob(cert["id"])
+    if blob:
+        return blob
+    legacy = storage.get_certificate_file(cert.get("file_path", ""))  # older records
+    if legacy is not None:
+        mime = storage.MIME_TYPES.get(legacy.suffix.lower(), "application/octet-stream")
+        return legacy.read_bytes(), legacy.name, mime
+    return None
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def pdf_to_images(pdf_bytes, max_pages=3):
+    """Render the first PDF pages to PNG bytes so they display as real images."""
+    try:
+        import pymupdf
+    except ImportError:
+        return []
+    pages = []
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for index in range(min(len(doc), max_pages)):
+            pix = doc[index].get_pixmap(matrix=pymupdf.Matrix(1.6, 1.6))
+            pages.append(pix.tobytes("png"))
+    return pages
+
+
+def render_file(cert, key, preview=True):
+    """Show the real certificate: image preview, rendered PDF pages, and download."""
+    if not (cert.get("has_blob") or cert.get("file_path")):
+        st.caption("📎 No certificate file attached.")
         return
-    if path.suffix.lower() == ".pdf":
-        st.download_button(
-            "📄 Download certificate (PDF)",
-            data=path.read_bytes(),
-            file_name=path.name,
-            mime="application/pdf",
-            key=f"dl_{key}",
+    loaded = load_file(cert)
+    if loaded is None:
+        st.warning(
+            "Certificate file is missing from storage. "
+            "Open Admin Studio → Manage → Replace file to upload it again."
         )
-    else:
-        st.image(str(path), width="stretch")
+        return
+
+    data, name, mime = loaded
+    if preview:
+        if mime == "application/pdf":
+            pages = pdf_to_images(data)
+            if pages:
+                for number, page_png in enumerate(pages, start=1):
+                    st.image(page_png, width="stretch")
+            else:
+                st.info("PDF preview unavailable — use the download button.")
+        else:
+            st.image(data, width="stretch")
+    st.download_button(
+        "⬇️ Download certificate",
+        data=data,
+        file_name=name,
+        mime=mime or "application/octet-stream",
+        key=f"dl_{key}",
+    )
 
 
 # ==========================================
@@ -305,7 +348,7 @@ elif page == "Certificates":
         st.caption(f"Showing {len(certificates)} certificate(s)")
         for cert in certificates:
             with st.container(border=True):
-                left, right = st.columns([2, 1], gap="large")
+                left, right = st.columns([2, 3], gap="large")
                 with left:
                     st.subheader(cert["title"])
                     st.markdown(
@@ -326,7 +369,7 @@ elif page == "Certificates":
                     if cert["verification_url"] and valid_url(cert["verification_url"]):
                         st.link_button("🔗 Verify credential", cert["verification_url"])
                 with right:
-                    render_file(cert["file_path"], f"pub_{cert['id']}")
+                    render_file(cert, f"pub_{cert['id']}")
 
 
 # ==========================================
@@ -451,10 +494,10 @@ elif page in ("Admin", "Login"):
             elif not valid_url(verification_url):
                 st.error("Verification URL must start with http:// or https://")
             else:
-                saved_path = ""
                 try:
+                    file_data, file_name, file_mime = (None, "", "")
                     if upload is not None:
-                        saved_path = storage.save_certificate_file(upload)
+                        file_data, file_name, file_mime = storage.prepare_upload(upload)
                     new_id = db.add_certificate(
                         title=title,
                         issuer=issuer,
@@ -464,16 +507,16 @@ elif page in ("Admin", "Login"):
                         verification_url=verification_url.strip(),
                         description=description.strip(),
                         skills=skills.strip(),
-                        file_path=saved_path,
                         published=publish,
+                        file_data=file_data,
+                        file_name=file_name,
+                        file_mime=file_mime,
                     )
                     flash(f"Certificate #{new_id} saved.", "success")
                     st.rerun()
                 except storage.StorageError as exc:
                     st.error(str(exc))
                 except Exception as exc:  # noqa: BLE001
-                    if saved_path:
-                        storage.delete_certificate_file(saved_path)
                     st.error(f"Could not save certificate: {exc}")
 
     # ----- Manage -----
@@ -511,11 +554,14 @@ elif page in ("Admin", "Login"):
                     e_pub = st.checkbox("Published", value=bool(cert["published"]))
                     save_clicked = st.form_submit_button("Save Changes", type="primary")
 
-                current = storage.get_certificate_file(cert["file_path"])
-                if current is not None:
-                    st.caption(f"Current file: {current.name}")
-                    if current.suffix.lower() != ".pdf":
-                        st.image(str(current), width=260)
+                if cert.get("has_blob") or cert.get("file_path"):
+                    loaded = load_file(cert)
+                    if loaded is None:
+                        st.warning("Attached file is missing — upload it again with 'Replace file'.")
+                    else:
+                        st.caption(f"Current file: {loaded[1]}")
+                        if loaded[2] != "application/pdf":
+                            st.image(loaded[0], width=260)
                 else:
                     st.caption("No file attached.")
 
@@ -525,10 +571,7 @@ elif page in ("Admin", "Login"):
                     elif not valid_url(e_url):
                         st.error("Verification URL must start with http:// or https://")
                     else:
-                        new_path = None
                         try:
-                            if e_file is not None:
-                                new_path = storage.save_certificate_file(e_file)
                             fields = dict(
                                 title=e_title,
                                 issuer=e_issuer,
@@ -540,18 +583,15 @@ elif page in ("Admin", "Login"):
                                 skills=e_skills.strip(),
                                 published=e_pub,
                             )
-                            if new_path:
-                                fields["file_path"] = new_path
+                            if e_file is not None:
+                                data, fname, fmime = storage.prepare_upload(e_file)
+                                fields.update(file_data=data, file_name=fname, file_mime=fmime)
                             db.update_certificate(cid, **fields)
-                            if new_path and cert["file_path"]:
-                                storage.delete_certificate_file(cert["file_path"])
                             flash("Certificate updated.", "success")
                             st.rerun()
                         except storage.StorageError as exc:
                             st.error(str(exc))
                         except Exception as exc:  # noqa: BLE001
-                            if new_path:
-                                storage.delete_certificate_file(new_path)
                             st.error(f"Could not update certificate: {exc}")
 
                 d1, d2, d3 = st.columns([1, 1, 2])

@@ -7,7 +7,8 @@ A Streamlit certificate portfolio with a public gallery and a password-protected
 - Public gallery with search and category filter
 - Admin login (email + password, 5-attempt lockout)
 - Add, edit, replace file, publish/unpublish, delete (with confirmation)
-- SQLite metadata + local file storage
+- SQLite database; certificate files are stored inside the database record
+- PDF certificates are previewed as real page images (PyMuPDF) plus a download button
 - Upload validation: PDF, PNG, JPG/JPEG, WEBP, 10 MB max, file-signature check
 
 ## Run locally

@@ -1,1 +1,2 @@
 streamlit>=1.52,<2.0
+pymupdf>=1.24
