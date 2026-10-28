@@ -2,6 +2,8 @@ from datetime import date, datetime
 from html import escape
 from pathlib import Path
 import base64
+import hashlib
+import certificate_ai
 
 import streamlit as st
 
@@ -479,37 +481,127 @@ elif page in ("Admin", "Login"):
     tab_add, tab_manage = st.tabs(["➕ Add Certificate", "🗂️ Manage Certificates"])
 
     # ----- Add -----
+    
+    # ----- Add -----
     with tab_add:
+        # Keep uploader OUTSIDE the form so upload triggers a rerun.
+        upload = st.file_uploader(
+            "Certificate file (PDF, PNG, JPG, JPEG, WEBP — max 10 MB)",
+            type=["pdf", "png", "jpg", "jpeg", "webp"],
+            key="add_certificate_upload",
+        )
+
+        # Automatically analyze each newly selected file only once.
+        if upload is not None:
+            upload_bytes = upload.getvalue()
+            upload_signature = hashlib.sha256(upload_bytes).hexdigest()
+
+            if st.session_state.get("add_processed_signature") != upload_signature:
+                try:
+                    with st.spinner("Reading certificate and detecting details..."):
+                        detected = certificate_ai.analyze_certificate(
+                            upload_bytes,
+                            upload.name,
+                            CATEGORIES,
+                        )
+
+                    st.session_state["add_title"] = detected.get("title", "")
+                    st.session_state["add_issuer"] = detected.get("issuer", "")
+                    st.session_state["add_category"] = detected.get(
+                        "category", "Other"
+                    )
+                    st.session_state["add_issue_date"] = detected.get(
+                        "issue_date", date.today()
+                    )
+                    st.session_state["add_credential_id"] = detected.get(
+                        "credential_id", ""
+                    )
+                    st.session_state["add_verification_url"] = detected.get(
+                        "verification_url", ""
+                    )
+                    st.session_state["add_skills"] = detected.get("skills", "")
+                    st.session_state["add_description"] = detected.get(
+                        "description", ""
+                    )
+                    st.session_state["add_detected_recipient"] = detected.get(
+                        "recipient", ""
+                    )
+                    st.session_state["add_processed_signature"] = upload_signature
+
+                    st.success(
+                        "Certificate scanned. Review and correct the suggested details below."
+                    )
+                except Exception as exc:
+                    st.warning(
+                        "Automatic reading failed. You can still enter the details manually. "
+                        f"Reason: {exc}"
+                    )
+
+        detected_recipient = st.session_state.get("add_detected_recipient", "")
+        if upload is not None and detected_recipient:
+            st.info(f"Detected recipient name (please verify): {detected_recipient}")
+
         with st.form("add_form", clear_on_submit=True):
             c1, c2 = st.columns(2)
-            title = c1.text_input("Title *")
-            issuer = c2.text_input("Issuer *")
-            category = c1.selectbox("Category", CATEGORIES, index=len(CATEGORIES) - 1)
-            issue_date = c2.date_input("Issue date", value=date.today())
-            credential_id = c1.text_input("Credential ID")
-            verification_url = c2.text_input("Verification URL (https://...)")
-            skills = st.text_input("Skills (comma separated)")
-            description = st.text_area("Description")
-            upload = st.file_uploader(
-                "Certificate file (PDF, PNG, JPG, JPEG, WEBP — max 10 MB)",
-                type=["pdf", "png", "jpg", "jpeg", "webp"],
+
+            title = c1.text_input("Title *", key="add_title")
+            issuer = c2.text_input("Issuer *", key="add_issuer")
+
+            category = c1.selectbox(
+                "Category",
+                CATEGORIES,
+                index=(
+                    CATEGORIES.index(st.session_state["add_category"])
+                    if st.session_state.get("add_category") in CATEGORIES
+                    else len(CATEGORIES) - 1
+                ),
+                key="add_category",
             )
-            publish = st.checkbox("Publish immediately", value=True)
-            add_clicked = st.form_submit_button("Save Certificate", type="primary")
+
+            issue_date = c2.date_input(
+                "Issue date",
+                value=st.session_state.get("add_issue_date", date.today()),
+                key="add_issue_date",
+            )
+
+            credential_id = c1.text_input(
+                "Credential ID", key="add_credential_id"
+            )
+            verification_url = c2.text_input(
+                "Verification URL (https://...)",
+                key="add_verification_url",
+            )
+            skills = st.text_input(
+                "Skills (comma separated)", key="add_skills"
+            )
+            description = st.text_area(
+                "Description", key="add_description"
+            )
+
+            publish = st.checkbox(
+                "Publish immediately", value=True, key="add_publish"
+            )
+
+            add_clicked = st.form_submit_button(
+                "Save Certificate", type="primary"
+            )
 
         if add_clicked:
             if not title.strip() or not issuer.strip():
                 st.error("Title and issuer are required.")
             elif not valid_url(verification_url):
-                st.error("Verification URL must start with http:// or https://")
+                st.error(
+                    "Verification URL must start with http:// or https://"
+                )
+            elif upload is None:
+                st.error("Please upload the certificate file.")
             else:
                 try:
-                    file_data, file_name, file_mime = (None, "", "")
-                    if upload is not None:
-                        file_data, file_name, file_mime = storage.prepare_upload(upload)
+                    file_data, file_name, file_mime = storage.prepare_upload(upload)
+
                     new_id = db.add_certificate(
-                        title=title,
-                        issuer=issuer,
+                        title=title.strip(),
+                        issuer=issuer.strip(),
                         category=category,
                         issue_date=issue_date.isoformat() if issue_date else "",
                         credential_id=credential_id.strip(),
@@ -521,11 +613,15 @@ elif page in ("Admin", "Login"):
                         file_name=file_name,
                         file_mime=file_mime,
                     )
+
+                    st.session_state.pop("add_processed_signature", None)
+                    st.session_state.pop("add_detected_recipient", None)
                     flash(f"Certificate #{new_id} saved.", "success")
                     st.rerun()
+
                 except storage.StorageError as exc:
                     st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     st.error(f"Could not save certificate: {exc}")
 
     # ----- Manage -----
