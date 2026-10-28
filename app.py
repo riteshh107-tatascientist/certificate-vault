@@ -18,13 +18,22 @@ ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
 
 CATEGORIES = [
-    "Data Science",
-    "Python",
-    "Machine Learning",
-    "Artificial Intelligence",
-    "SQL",
+    "AI & Machine Learning",
+    "Data Science & Analytics",
+    "Programming & Software Development",
+    "Hackathon",
+    "Quiz Competition",
+    "Coding Competition",
+    "Workshop",
+    "Webinar & Seminar",
+    "Bootcamp & Training",
     "Internship",
-    "Other",
+    "Job Simulation",
+    "Course Completion",
+    "Academic Achievement",
+    "Award & Recognition",
+    "Volunteering & Leadership",
+    "Other"
 ]
 
 
