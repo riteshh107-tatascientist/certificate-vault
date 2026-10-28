@@ -13,8 +13,25 @@ DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "certificates.db"
 
 
+@contextmanager
+def get_connection():
+    """Open a database connection and manage transactions."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(DB_PATH), timeout=30)
+    connection.row_factory = sqlite3.Row
+
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def initialize_database():
-    """Create the database and required tables."""
+    """Create tables and safely migrate older databases."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     with get_connection() as connection:
@@ -35,15 +52,15 @@ def initialize_database():
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
-                # Check existing database columns
+
+        # Add missing columns to existing databases.
         existing = {
-            row[1]
+            row["name"]
             for row in connection.execute(
                 "PRAGMA table_info(certificates)"
             )
         }
 
-        # Add missing columns to older databases
         migrations = {
             "file_data": "BLOB",
             "file_name": "TEXT DEFAULT ''",
@@ -56,16 +73,7 @@ def initialize_database():
                     f"ALTER TABLE certificates "
                     f"ADD COLUMN {column} {definition}"
                 )
-
-        # Migrate older databases: store the certificate file inside the DB.
-        existing = {row[1] for row in connection.execute("PRAGMA table_info(certificates)")}
-        for column, ddl in (
-            ("file_data", "BLOB"),
-            ("file_name", "TEXT DEFAULT ''"),
-            ("file_mime", "TEXT DEFAULT ''"),
-        ):
-            if column not in existing:
-                connection.execute(f"ALTER TABLE certificates ADD COLUMN {column} {ddl}")
+                existing.add(column)
 
         connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_certificates_published
@@ -78,41 +86,33 @@ def initialize_database():
         """)
 
 
-@contextmanager
-def get_connection():
-    """Provide a database connection and manage transactions."""
-    connection = sqlite3.connect(
-        str(DB_PATH),
-        timeout=30,
-    )
-    connection.row_factory = sqlite3.Row
-
-    try:
-        yield connection
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
 LIST_COLUMNS = (
-    "id, title, issuer, category, issue_date, credential_id, verification_url, "
-    "description, skills, file_path, published, created_at, updated_at, "
-    "file_name, file_mime, (file_data IS NOT NULL AND LENGTH(file_data) > 0) AS has_blob"
+    "id, title, issuer, category, issue_date, credential_id, "
+    "verification_url, description, skills, file_path, published, "
+    "created_at, updated_at, file_name, file_mime, "
+    "(file_data IS NOT NULL AND LENGTH(file_data) > 0) AS has_blob"
 )
 
 
 def get_certificate_blob(certificate_id):
-    """Return (bytes, filename, mime) stored in the database, or None."""
+    """Return certificate bytes, filename and MIME type, or None."""
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT file_data, file_name, file_mime FROM certificates WHERE id = ?",
+            """
+            SELECT file_data, file_name, file_mime
+            FROM certificates
+            WHERE id = ?
+            """,
             (certificate_id,),
         ).fetchone()
+
     if row and row["file_data"]:
-        return bytes(row["file_data"]), row["file_name"] or "certificate", row["file_mime"] or ""
+        return (
+            bytes(row["file_data"]),
+            row["file_name"] or "certificate",
+            row["file_mime"] or "",
+        )
+
     return None
 
 
@@ -131,9 +131,9 @@ def add_certificate(
     file_name="",
     file_mime="",
 ):
-    """Insert a certificate and return its new ID."""
-    title = title.strip()
-    issuer = issuer.strip()
+    """Insert a certificate and return its ID."""
+    title = str(title or "").strip()
+    issuer = str(issuer or "").strip()
 
     if not title:
         raise ValueError("Certificate title is required.")
@@ -162,7 +162,7 @@ def add_certificate(
                 description,
                 skills,
                 file_path,
-                int(published),
+                int(bool(published)),
                 file_data,
                 file_name,
                 file_mime,
@@ -173,21 +173,17 @@ def add_certificate(
 
 
 def get_certificate(certificate_id):
-    """Return one certificate or None."""
+    """Return one certificate as a dictionary, or None."""
     with get_connection() as connection:
         row = connection.execute(
             "SELECT * FROM certificates WHERE id = ?",
             (certificate_id,),
         ).fetchone()
 
-        return dict(row) if row else None
+    return dict(row) if row else None
 
 
-def get_certificates(
-    published_only=False,
-    category=None,
-    search=None,
-):
+def get_certificates(published_only=False, category=None, search=None):
     """Return certificates with optional filters."""
     query = f"SELECT {LIST_COLUMNS} FROM certificates WHERE 1=1"
     parameters = []
@@ -208,36 +204,24 @@ def get_certificates(
                 OR description LIKE ?
             )
         """
-        search_term = f"%{search.strip()}%"
-        parameters.extend([search_term] * 4)
+        term = f"%{search.strip()}%"
+        parameters.extend([term] * 4)
 
     query += " ORDER BY created_at DESC, id DESC"
 
     with get_connection() as connection:
-        rows = connection.execute(
-            query,
-            parameters,
-        ).fetchall()
+        rows = connection.execute(query, parameters).fetchall()
 
-        return [dict(row) for row in rows]
+    return [dict(row) for row in rows]
 
 
 def update_certificate(certificate_id, **fields):
-    """Update supported fields for an existing certificate."""
+    """Update supported fields for a certificate."""
     allowed_fields = {
-        "title",
-        "issuer",
-        "category",
-        "issue_date",
-        "credential_id",
-        "verification_url",
-        "description",
-        "skills",
-        "file_path",
-        "published",
-        "file_data",
-        "file_name",
-        "file_mime",
+        "title", "issuer", "category", "issue_date",
+        "credential_id", "verification_url", "description",
+        "skills", "file_path", "published", "file_data",
+        "file_name", "file_mime",
     }
 
     updates = {
@@ -249,15 +233,13 @@ def update_certificate(certificate_id, **fields):
     if not updates:
         raise ValueError("No valid fields supplied for update.")
 
-    if "title" in updates:
-        updates["title"] = str(updates["title"]).strip()
-        if not updates["title"]:
-            raise ValueError("Certificate title cannot be empty.")
-
-    if "issuer" in updates:
-        updates["issuer"] = str(updates["issuer"]).strip()
-        if not updates["issuer"]:
-            raise ValueError("Certificate issuer cannot be empty.")
+    for field in ("title", "issuer"):
+        if field in updates:
+            updates[field] = str(updates[field] or "").strip()
+            if not updates[field]:
+                raise ValueError(
+                    f"{field.capitalize()} cannot be empty."
+                )
 
     if "published" in updates:
         updates["published"] = int(bool(updates["published"]))
@@ -265,9 +247,7 @@ def update_certificate(certificate_id, **fields):
     assignments = ", ".join(
         f"{field} = ?" for field in updates
     )
-
-    values = list(updates.values())
-    values.append(certificate_id)
+    values = list(updates.values()) + [certificate_id]
 
     with get_connection() as connection:
         cursor = connection.execute(
@@ -279,7 +259,7 @@ def update_certificate(certificate_id, **fields):
             values,
         )
 
-        return cursor.rowcount > 0
+    return cursor.rowcount > 0
 
 
 def delete_certificate(certificate_id):
@@ -290,7 +270,7 @@ def delete_certificate(certificate_id):
             (certificate_id,),
         )
 
-        return cursor.rowcount > 0
+    return cursor.rowcount > 0
 
 
 def set_published(certificate_id, published):
@@ -302,7 +282,7 @@ def set_published(certificate_id, published):
 
 
 def get_dashboard_stats():
-    """Return counts for the dashboard."""
+    """Return dashboard counts."""
     with get_connection() as connection:
         total = connection.execute(
             "SELECT COUNT(*) FROM certificates"
@@ -320,13 +300,13 @@ def get_dashboard_stats():
             """
         ).fetchone()[0]
 
-        return {
-            "total": total,
-            "published": published,
-            "categories": categories,
-            "drafts": total - published,
-        }
+    return {
+        "total": total,
+        "published": published,
+        "categories": categories,
+        "drafts": total - published,
+    }
 
 
-# Create database tables when this module is imported.
+# Initialize and migrate the database when this module loads.
 initialize_database()
