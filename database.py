@@ -35,6 +35,27 @@ def initialize_database():
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+                # Check existing database columns
+        existing = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(certificates)"
+            )
+        }
+
+        # Add missing columns to older databases
+        migrations = {
+            "file_data": "BLOB",
+            "file_name": "TEXT DEFAULT ''",
+            "file_mime": "TEXT DEFAULT ''",
+        }
+
+        for column, definition in migrations.items():
+            if column not in existing:
+                connection.execute(
+                    f"ALTER TABLE certificates "
+                    f"ADD COLUMN {column} {definition}"
+                )
 
         # Migrate older databases: store the certificate file inside the DB.
         existing = {row[1] for row in connection.execute("PRAGMA table_info(certificates)")}
